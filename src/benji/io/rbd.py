@@ -48,6 +48,23 @@ class IO(ThreadedIOBase):
         self._image_name = None
         self._snapshot_name = None
 
+        self._local = threading.local()
+
+    def _get_rbd_image(self) -> rbd.Image:
+        assert self._pool_name is not None and self._image_name is not None
+        if not hasattr(self._local, 'rbd_image'):
+            logger.debug('Opening RBD image for {}'.format(threading.current_thread().name))
+            try:
+                ioctx = self._cluster.open_ioctx(self._pool_name)
+            except rados.ObjectNotFound:
+                raise FileNotFoundError('Ceph pool {} not found.'.format(self._pool_name)) from None
+            try:
+                self._local.rbd_image = rbd.Image(ioctx, self._image_name, self._snapshot_name)
+            except rbd.ImageNotFound:
+                raise FileNotFoundError('RBD image or snapshot {} not found.'.format(self.url)) from None
+
+        return self._local.rbd_image
+
     def open_r(self) -> None:
         super().open_r()
 
@@ -57,16 +74,8 @@ class IO(ThreadedIOBase):
                 self.url, self.name, self.name))
         self._pool_name, self._image_name, self._snapshot_name = re_match.groups()
 
-        # try opening it and quit if that's not possible.
-        try:
-            ioctx = self._cluster.open_ioctx(self._pool_name)
-        except rados.ObjectNotFound:
-            raise FileNotFoundError('Ceph pool {} not found.'.format(self._pool_name)) from None
-
-        try:
-            rbd.Image(ioctx, self._image_name, self._snapshot_name, read_only=True)
-        except rbd.ImageNotFound:
-            raise FileNotFoundError('RBD image or snapshot {} not found.'.format(self.url)) from None
+        # try opening it and raise if that's not possible.
+        self._get_rbd_image()
 
     def open_w(self, size: int, force: bool = False, sparse: bool = False) -> None:
         super().open_w(size, force, sparse)
@@ -83,7 +92,7 @@ class IO(ThreadedIOBase):
             raise FileNotFoundError('Ceph pool {} not found.'.format(self._pool_name)) from None
 
         try:
-            image = rbd.Image(ioctx, self._image_name)
+            rbd_image = rbd.Image(ioctx, self._image_name)
         except rbd.ImageNotFound:
             rbd.RBD().create(ioctx, self._image_name, size, old_format=False, features=self._new_image_features)
             rbd.Image(ioctx, self._image_name)
@@ -93,7 +102,7 @@ class IO(ThreadedIOBase):
                     raise FileExistsError(
                         'RBD image {} already exists. Force the restore if you want to overwrite it.'.format(self.url))
                 else:
-                    image_size = image.size()
+                    image_size = rbd_image.size()
                     if size > image_size:
                         raise IOError(
                             'RBD image {} is too small. Its size is {} bytes, but we need {} bytes for the restore.'.format(
@@ -107,25 +116,23 @@ class IO(ThreadedIOBase):
                         bytes_to_end = image_size
                         while bytes_to_end > 0:
                             region_length = min(0x7fffffff, bytes_to_end)
-                            image.discard(region_start, region_length)
+                            rbd_image.discard(region_start, region_length)
                             region_start += region_length
                             bytes_to_end -= region_length
             finally:
-                image.close()
+                rbd_image.close()
+
+            if not sparse:
+                logger.warn('Non-sparse restore initiated. This is going to take more space and time if the '
+                            'image contains sparse blocks and is not recommended.')
 
     def size(self) -> int:
-        assert self._pool_name is not None and self._image_name is not None
-        ioctx = self._cluster.open_ioctx(self._pool_name)
-        with rbd.Image(ioctx, self._image_name, self._snapshot_name, read_only=True) as image:
-            size = image.size()
-        return size
+        return self._get_rbd_image().size()
 
     def _read(self, block: DereferencedBlock) -> Tuple[DereferencedBlock, bytes]:
         offset = block.id * self.block_size
         t1 = time.time()
-        ioctx = self._cluster.open_ioctx(self._pool_name)
-        with rbd.Image(ioctx, self._image_name, self._snapshot_name, read_only=True) as image:
-            data = image.read(offset, block.size, rados.LIBRADOS_OP_FLAG_FADVISE_DONTNEED)
+        data = self._get_rbd_image().read(offset, block.size, rados.LIBRADOS_OP_FLAG_FADVISE_DONTNEED)
         t2 = time.time()
 
         if not data:
@@ -142,9 +149,7 @@ class IO(ThreadedIOBase):
     def _write(self, block: DereferencedBlock, data: bytes) -> DereferencedBlock:
         offset = block.id * self.block_size
         t1 = time.time()
-        ioctx = self._cluster.open_ioctx(self._pool_name)
-        with rbd.Image(ioctx, self._image_name, self._snapshot_name) as image:
-            written = image.write(data, offset, rados.LIBRADOS_OP_FLAG_FADVISE_DONTNEED)
+        written = self._get_rbd_image().write(data, offset, rados.LIBRADOS_OP_FLAG_FADVISE_DONTNEED)
         t2 = time.time()
 
         logger.debug('{} wrote block {} in {:.3f}s'.format(
