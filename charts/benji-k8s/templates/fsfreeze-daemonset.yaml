@@ -23,7 +23,7 @@ spec:
         app.kubernetes.io/instance: {{ .Release.Name }}
         app.kubernetes.io/component: fsfreeze
     spec:
-      serviceAccountName: {{ tuple . "" | include "benji.fullname" }}
+      serviceAccountName: {{ tuple . "fsfreeze" | include "benji.fullname" }}
       dnsPolicy: ClusterFirstWithHostNet
       containers:
         - name: fsfreeze
