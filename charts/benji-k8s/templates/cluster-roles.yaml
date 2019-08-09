@@ -34,6 +34,19 @@ rules:
   - get
   - list
   - watch
+- apiGroups:
+    - "benji-backup.me"
+  resources:
+    - benjirestores
+    - benjiversions
+    - benjibackups
+  verbs:
+    - create
+    - update
+    - get
+    - list
+    - watch
+    - patch
 {{- if .Values.fsfreeze.enabled }}
 - apiGroups:
   - ""
@@ -68,8 +81,8 @@ rules:
       - "benji-backup.me"
     resources:
       - benjirestores
-      - benjiversions
       - benjibackups
+      - benjioperatorconfigs
     verbs:
       - get
       - list

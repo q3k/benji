@@ -5,13 +5,15 @@ import re
 import time
 import uuid
 from subprocess import TimeoutExpired, CalledProcessError
-from typing import List, Union, Tuple
+from typing import List, Union, Tuple, Dict, Any
 
 import kubernetes
+from kubernetes.client.rest import ApiException
 from kubernetes.stream import stream
 from kubernetes.stream.ws_client import ERROR_CHANNEL, STDOUT_CHANNEL, STDERR_CHANNEL
 
 from benji.helpers.settings import running_pod_name, benji_instance
+from benji.helpers.utils import version_string
 
 SERVICE_NAMESPACE_FILENAME = '/var/run/secrets/kubernetes.io/serviceaccount/namespace'
 
@@ -193,6 +195,96 @@ def create_pvc(pvc_name: str, pvc_namespace: int,
 
     core_v1_api = kubernetes.client.CoreV1Api()
     return core_v1_api.create_namespaced_persistent_volume_claim(namespace=pvc_namespace, body=pvc)
+
+
+def update_version_resource(version: Dict[str, Any], namespace: str) -> None:
+    labels = {}
+    for label in version['labels']:
+        labels[label['name']] = label['value']
+
+    # Resource names must be lowercase
+    benji_version_name = version_string(version['uid']).lower()
+
+    body = {
+        'apiVersion': 'benji-backup.me/v1alpha1',
+        'kind': 'BenjiVersion',
+        'metadata': {
+            'name': benji_version_name,
+            'namespace': namespace,
+            'labels': labels,
+            # FIXME: Add annotations for example for last reconciliation
+            'annotations': {},
+        },
+        'spec': {
+            # FIXME: Add Z in metadata exports
+            'date': version['date'] + 'Z',
+            'name': version['name'],
+            'snapshotName': version['snapshot_name'],
+            # TODO: Convert to e.g. 10Gi are something
+            'size': str(version['size']),
+            # FIXME: Convert to storage name
+            'storageId': version['storage_id'],
+            'bytesRead': version['bytes_read'],
+            'bytesWritten': version['bytes_written'],
+            'bytesDedup': version['bytes_dedup'],
+            'bytesSparse': version['bytes_sparse'],
+            'duration': version['duration'],
+        },
+        'status': {
+            'protected': str(version['protected']).capitalize(),
+            'status': version['status'].capitalize(),
+        }
+    }
+
+    custom_objects_api = kubernetes.client.CustomObjectsApi()
+
+    try:
+        benji_version = custom_objects_api.get_namespaced_custom_object(group='benji-backup.me',
+                                                                        version='v1alpha1',
+                                                                        plural='benjiversions',
+                                                                        name=benji_version_name,
+                                                                        namespace=namespace)
+
+        body['metadata']['resourceVersion'] = benji_version['metadata']['resourceVersion']
+        # Keep other labels and annotations but overwrite our own
+        body['metadata']['labels'] = benji_version['metadata'].get('labels', {}).update(body['metadata']['labels'])
+        body['metadata']['annotations'] = benji_version['metadata'].get('annotations',
+                                                                        {}).update(body['metadata']['annotations'])
+
+        custom_objects_api.replace_namespaced_custom_object(group='benji-backup.me',
+                                                            version='v1alpha1',
+                                                            plural='benjiversions',
+                                                            name=benji_version_name,
+                                                            namespace=namespace,
+                                                            body=body)
+    except ApiException as exception:
+        if exception.status == 404:
+            custom_objects_api.create_namespaced_custom_object(group='benji-backup.me',
+                                                               version='v1alpha1',
+                                                               plural='benjiversions',
+                                                               namespace=namespace,
+                                                               body=body)
+        else:
+            raise exception
+
+
+def delete_version_resource(version_uid: int, namespace: str) -> None:
+    # Resource names must be lowercase
+    benji_version_name = version_string(version_uid).lower()
+
+    custom_objects_api = kubernetes.client.CustomObjectsApi()
+
+    try:
+        custom_objects_api.delete_cluster_custom_object(group='benji-backup.me',
+                                                        version='v1alpha1',
+                                                        plural='benjiversions',
+                                                        name=benji_version_name,
+                                                        namespace=namespace)
+    except ApiException as exception:
+        if exception.status == 404:
+            pass
+        else:
+            raise exception
 
 
 # This is taken from https://github.com/kubernetes-client/python/pull/855 with minimal changes.

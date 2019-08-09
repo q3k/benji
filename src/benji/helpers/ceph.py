@@ -110,7 +110,8 @@ def backup_differential(*,
     return result
 
 
-def backup(*, version_name: str, pool: str, image: str, version_labels: Dict[str, str] = {}, context: Any = None):
+def backup(*, version_name: str, pool: str, image: str, version_labels: Dict[str, str] = {},
+           context: Any = None) -> Dict[str, Any]:
     signal_backup_pre.send(SIGNAL_SENDER,
                            version_name=version_name,
                            pool=pool,
@@ -185,3 +186,5 @@ def backup(*, version_name: str, pool: str, image: str, version_labels: Dict[str
                                         version_labels=version_labels,
                                         context=context,
                                         version=version)
+
+    return version

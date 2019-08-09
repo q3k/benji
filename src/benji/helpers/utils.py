@@ -61,3 +61,7 @@ def subprocess_run(args: List[str], input: str = None, timeout: int = None,
             return result.stdout
     else:
         raise RuntimeError(f'{args[0]} invocation failed with return code {result.returncode} and output: {_one_line_stderr(result.stderr)}')
+
+
+def version_string(version_uid: int) -> str:
+    return 'V' + str(version_uid).zfill(10)

@@ -76,6 +76,8 @@ operator:
     tag: latest
     pullPolicy: Always
 
+  instance: benji
+
   resources: {}
 
   nodeSelector: {}
@@ -100,8 +102,6 @@ fsfreeze:
   tolerations: []
 
   affinity: {}
-
-
 
 # Running the database backend on the same cluster could be dangerous!
 # Please consider the implications.

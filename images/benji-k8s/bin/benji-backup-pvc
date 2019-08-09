@@ -313,11 +313,13 @@ for pvc in pvcs:
     }
 
     context = {'pvc': pvc}
-    ceph.backup(version_name=version_name,
-                pool=pv.spec.rbd.pool,
-                image=pv.spec.rbd.image,
-                version_labels=version_labels,
-                context=context)
+    version = ceph.backup(version_name=version_name,
+                          pool=pv.spec.rbd.pool,
+                          image=pv.spec.rbd.image,
+                          version_labels=version_labels,
+                          context=context)
+
+    benji.helpers.kubernetes.update_version_resource(version, pvc.metadata.namespace)
 
 prometheus.push(prometheus.backup_registry)
 sys.exit(0)
